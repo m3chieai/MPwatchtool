@@ -1,0 +1,266 @@
+import axios from 'axios';
+
+interface EbaySearchParams {
+  keywords: string;
+  brand: string;
+  model: string;
+  referenceNumber?: string;
+}
+
+interface EbaySoldListing {
+  itemId: string;
+  title: string;
+  soldPrice: number;
+  currency: string;
+  saleDate: string;
+  condition?: string;
+  shippingCost?: number;
+  listingUrl: string;
+}
+
+export class EbayService {
+  private appId: string;
+  private apiUrl: string;
+
+  constructor() {
+    this.appId = process.env.EBAY_APP_ID!;
+    this.apiUrl = process.env.EBAY_FINDING_API_URL!;
+  }
+
+  /**
+   * Search for sold listings on eBay
+   */
+  async searchSoldListings(params: EbaySearchParams): Promise<EbaySoldListing[]> {
+    try {
+      const keywords = this.buildKeywords(params);
+      
+      const requestBody = this.buildFindingAPIRequest(keywords);
+      
+      const response = await axios.post(this.apiUrl, requestBody, {
+        headers: {
+          'X-EBAY-SOA-SECURITY-APPNAME': this.appId,
+          'X-EBAY-SOA-OPERATION-NAME': 'findCompletedItems',
+          'X-EBAY-SOA-SERVICE-VERSION': '1.13.0',
+          'X-EBAY-SOA-REQUEST-DATA-FORMAT': 'JSON',
+          'X-EBAY-SOA-RESPONSE-DATA-FORMAT': 'JSON',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      return this.parseEbayResponse(response.data);
+    } catch (error) {
+      console.error('eBay API Error:', error);
+      throw new Error('Failed to fetch eBay sold listings');
+    }
+  }
+
+  /**
+   * Build search keywords from watch details
+   */
+  private buildKeywords(params: EbaySearchParams): string {
+    const parts = [params.brand, params.model];
+    
+    if (params.referenceNumber) {
+      parts.push(params.referenceNumber);
+    }
+    
+    return parts.join(' ');
+  }
+
+  /**
+   * Build eBay Finding API request
+   */
+  private buildFindingAPIRequest(keywords: string) {
+    return {
+      'findCompletedItems': {
+        'keywords': keywords,
+        'itemFilter': [
+          {
+            'name': 'SoldItemsOnly',
+            'value': 'true'
+          },
+          {
+            'name': 'Condition',
+            'value': ['1000', '1500', '2000', '2500', '3000'] // New to Used
+          },
+          {
+            'name': 'ListingType',
+            'value': ['FixedPrice', 'Auction']
+          }
+        ],
+        'sortOrder': 'EndTimeSoonest',
+        'paginationInput': {
+          'entriesPerPage': '100',
+          'pageNumber': '1'
+        },
+        'outputSelector': [
+          'SellerInfo',
+          'PictureURLLarge'
+        ]
+      }
+    };
+  }
+
+  /**
+   * Parse eBay API response into our format
+   */
+  private parseEbayResponse(data: any): EbaySoldListing[] {
+    const listings: EbaySoldListing[] = [];
+
+    try {
+      const searchResult = data.findCompletedItemsResponse?.[0]?.searchResult?.[0];
+      const items = searchResult?.item || [];
+
+      for (const item of items) {
+        // Only include items that actually sold
+        const sellingStatus = item.sellingStatus?.[0];
+        const sellingState = sellingStatus?.sellingState?.[0];
+        
+        if (sellingState !== 'EndedWithSales') {
+          continue;
+        }
+
+        const soldPrice = parseFloat(sellingStatus?.currentPrice?.[0]?.__value__ || '0');
+        const currency = sellingStatus?.currentPrice?.[0]?.['@currencyId'] || 'USD';
+        
+        const shippingInfo = item.shippingInfo?.[0];
+        const shippingCost = parseFloat(shippingInfo?.shippingServiceCost?.[0]?.__value__ || '0');
+
+        listings.push({
+          itemId: item.itemId?.[0] || '',
+          title: item.title?.[0] || '',
+          soldPrice,
+          currency,
+          saleDate: item.listingInfo?.[0]?.endTime?.[0] || new Date().toISOString(),
+          condition: item.condition?.[0]?.conditionDisplayName?.[0],
+          shippingCost: shippingCost > 0 ? shippingCost : undefined,
+          listingUrl: item.viewItemURL?.[0] || '',
+        });
+      }
+    } catch (error) {
+      console.error('Error parsing eBay response:', error);
+    }
+
+    return listings;
+  }
+
+  /**
+   * Convert USD to CAD using Bank of Canada API
+   */
+  async convertToCAD(usdAmount: number): Promise<number> {
+    try {
+      // For MVP, use a fixed rate. In production, fetch from Bank of Canada API
+      const exchangeRate = 1.35; // USD to CAD approximate rate
+      return usdAmount * exchangeRate;
+    } catch (error) {
+      console.error('Currency conversion error:', error);
+      return usdAmount * 1.35; // Fallback rate
+    }
+  }
+
+  /**
+   * Extract watch details from eBay listing title
+   */
+  extractWatchDetails(title: string): {
+    hasBox: boolean;
+    hasPapers: boolean;
+    year?: number;
+  } {
+    const lowerTitle = title.toLowerCase();
+    
+    const hasBox = /\b(box|complete|full set)\b/.test(lowerTitle);
+    const hasPapers = /\b(papers|warranty|card|certificate|full set|complete)\b/.test(lowerTitle);
+    
+    // Extract year (e.g., "2020", "2021", etc.)
+    const yearMatch = title.match(/\b(19|20)\d{2}\b/);
+    const year = yearMatch ? parseInt(yearMatch[0]) : undefined;
+    
+    return { hasBox, hasPapers, year };
+  }
+
+  /**
+   * Determine condition tier from eBay condition
+   */
+  parseCondition(ebayCondition?: string): 'NEW_UNWORN' | 'EXCELLENT' | 'VERY_GOOD' | 'GOOD' | null {
+    if (!ebayCondition) return null;
+    
+    const condition = ebayCondition.toLowerCase();
+    
+    if (condition.includes('new') || condition.includes('unworn')) {
+      return 'NEW_UNWORN';
+    } else if (condition.includes('excellent') || condition.includes('mint')) {
+      return 'EXCELLENT';
+    } else if (condition.includes('very good') || condition.includes('great')) {
+      return 'VERY_GOOD';
+    } else if (condition.includes('good') || condition.includes('used')) {
+      return 'GOOD';
+    }
+    
+    return null;
+  }
+
+  /**
+   * Filter out invalid listings
+   */
+  filterValidListings(listings: EbaySoldListing[]): EbaySoldListing[] {
+    return listings.filter(listing => {
+      const title = listing.title.toLowerCase();
+      
+      // Exclude parts/repair items
+      if (title.includes('parts') || title.includes('repair') || title.includes('broken')) {
+        return false;
+      }
+      
+      // Exclude box/papers only
+      if ((title.includes('box only') || title.includes('papers only')) && 
+          !title.includes('watch')) {
+        return false;
+      }
+      
+      // Exclude items with suspiciously low prices (< $100)
+      if (listing.soldPrice < 100) {
+        return false;
+      }
+      
+      return true;
+    });
+  }
+
+  /**
+   * Calculate statistical outliers using IQR method
+   */
+  removeOutliers(prices: number[]): number[] {
+    if (prices.length < 4) return prices;
+    
+    const sorted = [...prices].sort((a, b) => a - b);
+    const q1Index = Math.floor(sorted.length * 0.25);
+    const q3Index = Math.floor(sorted.length * 0.75);
+    
+    const q1 = sorted[q1Index];
+    const q3 = sorted[q3Index];
+    const iqr = q3 - q1;
+    
+    const lowerBound = q1 - (1.5 * iqr);
+    const upperBound = q3 + (1.5 * iqr);
+    
+    return prices.filter(price => price >= lowerBound && price <= upperBound);
+  }
+
+  /**
+   * Calculate median price
+   */
+  calculateMedian(prices: number[]): number {
+    if (prices.length === 0) return 0;
+    
+    const sorted = [...prices].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    
+    if (sorted.length % 2 === 0) {
+      return (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+    
+    return sorted[mid];
+  }
+}
+
+export const ebayService = new EbayService();

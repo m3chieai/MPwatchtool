@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  role      UserRole @default(CUSTOMER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dealer   Dealer?
+  quotes   Quote[]
+}
+
+enum UserRole {
+  CUSTOMER
+  DEALER
+  ADMIN
+}
+
+// Dealer Management
+model Dealer {
+  id                String        @id @default(uuid())
+  userId            String        @unique
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessName      String
+  contactName       String
+  phone             String
+  businessAddress   String
+  taxId             String
+  status            DealerStatus  @default(PENDING)
+  createdAt         DateTime      @default(now())
+  approvedAt        DateTime?
+  approvedBy        String?
+
+  pricingPreferences DealerPricingPreference[]
+}
+
+enum DealerStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+}
+
+// Pricing Engine
+model DealerPricingPreference {
+  id                          String   @id @default(uuid())
+  dealerId                    String
+  dealer                      Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  brand                       String
+  model                       String?
+  conditionNewMultiplier      Float    @default(1.000)
+  conditionExcellentMultiplier Float   @default(0.920)
+  conditionVeryGoodMultiplier Float    @default(0.820)
+  conditionGoodMultiplier     Float    @default(0.680)
+  boxPapersFullMultiplier     Float    @default(1.080)
+  boxPapersBoxMultiplier      Float    @default(1.030)
+  boxPapersPapersMultiplier   Float    @default(1.040)
+  liquidityHighMultiplier     Float    @default(1.050)
+  liquidityLowMultiplier      Float    @default(0.920)
+  riskBufferAmount            Float    @default(500.00)
+  isActive                    Boolean  @default(false)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@unique([dealerId, brand, model])
+}
+
+// Pricing Index
+model PricingIndex {
+  id                String   @id @default(uuid())
+  brand             String
+  model             String
+  referenceNumber   String
+  baseMarketPrice   Float
+  sampleSize        Int
+  scrapedAt         DateTime
+  publishedAt       DateTime?
+  isActive          Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  
+  quotes            Quote[]
+  ebayListings      EbaySoldListing[]
+
+  @@index([brand, model, referenceNumber])
+}
+
+// eBay Data
+model EbaySoldListing {
+  id                  String    @id @default(uuid())
+  listingId           String    @unique
+  itemId              String
+  title               String
+  brand               String
+  model               String?
+  referenceNumber     String?
+  soldPrice           Float
+  currency            String
+  soldPriceCad        Float
+  conditionStructured String?
+  conditionParsed     WatchCondition?
+  saleDate            DateTime
+  shippingCost        Float?
+  hasBox              Boolean   @default(false)
+  hasPapers           Boolean   @default(false)
+  yearExtracted       Int?
+  isExcluded          Boolean   @default(false)
+  exclusionReason     String?
+  isOutlier           Boolean   @default(false)
+  scrapedAt           DateTime  @default(now())
+  listingUrl          String
+  pricingIndexId      String?
+  pricingIndex        PricingIndex? @relation(fields: [pricingIndexId], references: [id])
+
+  @@index([brand, model, referenceNumber])
+  @@index([saleDate])
+}
+
+// Quote Management
+model Quote {
+  id                    String        @id @default(uuid())
+  userId                String?
+  user                  User?         @relation(fields: [userId], references: [id])
+  customerEmail         String
+  brand                 String
+  model                 String
+  referenceNumber       String
+  condition             WatchCondition
+  hasBox                Boolean
+  hasPapers             Boolean
+  hasOriginalBracelet   Boolean       @default(true)
+  hasServiceRecords     Boolean       @default(false)
+  yearOfManufacture     Int?
+  baseMarketPrice       Float
+  finalQuoteAmount      Float
+  calculationBreakdown  Json?
+  pricingIndexId        String?
+  pricingIndex          PricingIndex? @relation(fields: [pricingIndexId], references: [id])
+  validUntil            DateTime
+  status                QuoteStatus   @default(ACTIVE)
+  createdAt             DateTime      @default(now())
+  acceptedAt            DateTime?
+searchHistory     SearchHistory?
+
+  @@index([customerEmail])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ErrorLog {
+  id          String   @id @default(cuid())
+  errorType   String   // e.g., "API_ERROR", "VALIDATION_ERROR", "SYSTEM_ERROR"
+  message     String
+  stack       String?  @db.Text
+  context     Json?    // Additional context (user data, request info, etc.)
+  severity    String   @default("error") // "error", "warning", "info"
+  resolved    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  userId      String?
+  
+  @@index([createdAt])
+  @@index([errorType])
+  @@index([resolved])
+}
+
+model SearchHistory {
+  id                String   @id @default(cuid())
+  brand             String
+  model             String?
+  referenceNumber   String
+  yearOfManufacture Int?
+  condition         WatchCondition
+  
+  // eBay search results
+  totalListings     Int
+  validListings     Int
+  priceRangeMin     Float
+  priceRangeMax     Float
+  medianPrice       Float
+  
+  // Reference price comparison
+  referencePrice    Float?
+  priceDifference   Float?
+  usedReferencePrice Boolean @default(false)
+  
+  // Final quote
+  quoteId           String?  @unique
+  quote             Quote?   @relation(fields: [quoteId], references: [id])
+  
+  createdAt         DateTime @default(now())
+  
+  @@index([brand])
+  @@index([referenceNumber])
+  @@index([createdAt])
+}
+enum WatchCondition {
+  NEW_UNWORN
+  EXCELLENT
+  VERY_GOOD
+  GOOD
+}
+
+enum QuoteStatus {
+  ACTIVE
+  ACCEPTED
+  EXPIRED
+  REJECTED
+}
+
+// Inventory (Future Phase)
+model Inventory {
+  id                String         @id @default(uuid())
+  brand             String
+  model             String
+  referenceNumber   String
+  condition         WatchCondition
+  yearOfManufacture Int?
+  hasBox            Boolean
+  hasPapers         Boolean
+  purchasePrice     Float
+  listingPrice      Float
+  status            InventoryStatus @default(AVAILABLE)
+  createdAt         DateTime       @default(now())
+  soldAt            DateTime?
+}
+
+enum InventoryStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  UNDER_SERVICE
+}
+
