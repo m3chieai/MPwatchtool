@@ -3,10 +3,9 @@ import { prisma } from '@/lib/prisma';
 import { ebayService } from '@/lib/services/ebay.service';
 import { pricingCalculator } from '@/lib/services/pricing.service';
 import { validateEbayPrice } from '@/lib/services/reference-prices';
-import { Resend } from 'resend'; // Added missing import
+import { Resend } from 'resend';
 import { z } from 'zod';
 
-// Initialize Resend with your API Key
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const quoteSchema = z.object({
@@ -69,7 +68,7 @@ export async function POST(request: NextRequest) {
         baseMarketPrice = validation.referencePrice * 1.35;
     }
 
-    // 5. Calculate Quote (Triggers Material Multipliers)
+    // 5. Calculate Quote
     const pricingBreakdown = pricingCalculator.calculateQuote({
       baseMarketPrice,
       referenceNumber: validatedData.referenceNumber, 
@@ -105,7 +104,7 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // 7. Log to SearchHistory for Admin Dashboard
+    // 7. Log to SearchHistory (Fixed terminal code)
     await prisma.searchHistory.create({
       data: {
         brand: validatedData.brand,
@@ -115,4 +114,35 @@ export async function POST(request: NextRequest) {
         condition: validatedData.condition,
         totalListings: ebayListings.length,
         validListings: validListings.length,
-        priceRangeMin: Math.min
+        priceRangeMin: Math.min(...cleanedPrices),
+        priceRangeMax: Math.max(...cleanedPrices),
+        medianPrice: baseMarketPrice
+      }
+    });
+
+    // 8. Trigger Email via Resend (non-fatal — quote is already saved)
+    if (process.env.RESEND_API_KEY) {
+      try {
+        await resend.emails.send({
+          from: 'MasterPiece <info@mpwatchtool.com>',
+          to: validatedData.customerEmail,
+          subject: `Your Watch Valuation: ${validatedData.brand} ${validatedData.referenceNumber}`,
+          html: `<p>Your watch is valued at <strong>$${pricingBreakdown.finalQuote.toLocaleString()} CAD</strong>.</p>`
+        });
+      } catch (emailError) {
+        console.error("⚠️ Email send failed (non-fatal):", emailError);
+      }
+    } else {
+      console.warn("⚠️ RESEND_API_KEY not set — skipping email");
+    }
+
+    return NextResponse.json(quote);
+
+  } catch (error) {
+    console.error("❌ Quote API Error:", error);
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Validation failed", details: error.errors }, { status: 400 });
+    }
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}

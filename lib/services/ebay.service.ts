@@ -134,17 +134,22 @@ export class EbayService {
       }
 
       // 4. Smart Price Floors
-      let minPrice = 1000; 
+      let minPrice = 1000;
       if (title.includes('rolex')) {
         const isLadies = /\b(6917|7917|lady|26mm|28mm|31mm)\b/.test(title);
-        
-        // Use safeRef here for the material check
+
+        // Vintage = 5-digit numeric ref (pre-2000 era, e.g. 16200, 69173)
+        // Modern  = 6-digit numeric ref with optional suffix (e.g. 116610LN)
+        const numericRef = safeRef.replace(/[^0-9]/g, '');
+        const isVintage  = numericRef.length <= 5;
+
         if (safeRef.endsWith('8')) {
-          minPrice = 9000;      // Solid Gold
+          minPrice = isVintage ? 3500 : 9000;   // Solid Gold (vintage gold still valuable)
         } else if (safeRef.endsWith('3')) {
-          minPrice = 3800;      // Two-Tone
+          minPrice = isVintage ? 2000 : 3800;   // Two-Tone (vintage two-tone cheaper)
         } else {
-          minPrice = isLadies ? 2200 : 7000; // Steel
+          // Steel: vintage Datejust/Oyster refs are much cheaper than modern sport Rolexes
+          minPrice = isLadies ? 1800 : (isVintage ? 2500 : 7000);
         }
       }
 
