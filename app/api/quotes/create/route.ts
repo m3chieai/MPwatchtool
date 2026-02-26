@@ -58,7 +58,10 @@ export async function POST(request: NextRequest) {
     }));
 
     const cleanedPrices = ebayService.removeOutliers(pricesInCAD);
-    let baseMarketPrice = ebayService.calculateMedian(cleanedPrices);
+
+    // Guard: removeOutliers can return empty array in extreme cases — fall back to raw prices
+    const safePrices = cleanedPrices.length > 0 ? cleanedPrices : pricesInCAD;
+    let baseMarketPrice = ebayService.calculateMedian(safePrices);
 
     // 4. Validate against reference prices
     const ebayMedianUSD = baseMarketPrice / 1.35;
@@ -104,21 +107,25 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // 7. Log to SearchHistory (Fixed terminal code)
-    await prisma.searchHistory.create({
-      data: {
-        brand: validatedData.brand,
-        model: "Submariner",
-        referenceNumber: validatedData.referenceNumber,
-        yearOfManufacture: validatedData.yearOfManufacture,
-        condition: validatedData.condition,
-        totalListings: ebayListings.length,
-        validListings: validListings.length,
-        priceRangeMin: Math.min(...cleanedPrices),
-        priceRangeMax: Math.max(...cleanedPrices),
-        medianPrice: baseMarketPrice
-      }
-    });
+    // 7. Log to SearchHistory (non-fatal)
+    try {
+      await prisma.searchHistory.create({
+        data: {
+          brand: validatedData.brand,
+          referenceNumber: validatedData.referenceNumber,
+          yearOfManufacture: validatedData.yearOfManufacture,
+          condition: validatedData.condition,
+          totalListings: ebayListings.length,
+          validListings: validListings.length,
+          priceRangeMin: Math.min(...safePrices),
+          priceRangeMax: Math.max(...safePrices),
+          medianPrice: baseMarketPrice,
+          quoteId: quote.id,
+        }
+      });
+    } catch (historyError) {
+      console.error("⚠️ SearchHistory log failed (non-fatal):", historyError);
+    }
 
     // 8. Trigger Email via Resend (non-fatal — quote is already saved)
     if (process.env.RESEND_API_KEY) {
@@ -139,10 +146,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(quote);
 
   } catch (error) {
-    console.error("❌ Quote API Error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("❌ Quote API Error:", message, error);
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Validation failed", details: error.errors }, { status: 400 });
     }
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ error: "Internal Server Error", detail: message }, { status: 500 });
   }
 }
