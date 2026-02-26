@@ -100,7 +100,7 @@ export default function QuotePage() {
       }
 
       const data = await response.json();
-      router.push(`/quote/${data.quoteId}`);
+      router.push(`/quote/${data.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
