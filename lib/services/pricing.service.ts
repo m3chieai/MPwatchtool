@@ -1,6 +1,9 @@
+export type DialType   = 'standard' | 'factory_diamond' | 'aftermarket_diamond';
+export type BezelType  = 'original' | 'aftermarket_with_original' | 'aftermarket_only' | 'heavy_iced';
+
 interface PricingParams {
   baseMarketPrice: number;
-  referenceNumber: string; 
+  referenceNumber: string;
   condition: 'NEW_UNWORN' | 'EXCELLENT' | 'VERY_GOOD' | 'GOOD';
   hasBox: boolean;
   hasPapers: boolean;
@@ -8,6 +11,8 @@ interface PricingParams {
   yearOfManufacture: number;
   isHighDemand?: boolean;
   isLowDemand?: boolean;
+  dialType?: DialType;
+  bezelType?: BezelType;
 }
 
 interface PricingBreakdown {
@@ -18,6 +23,10 @@ interface PricingBreakdown {
   conditionAdjustment: number;
   boxPapersMultiplier: number;
   boxPapersAdjustment: number;
+  dialMultiplier: number;
+  dialAdjustment: number;
+  bezelMultiplier: number;
+  bezelAdjustment: number;
   liquidityMultiplier: number;
   liquidityAdjustment: number;
   subtotal: number;
@@ -45,70 +54,81 @@ export class PricingCalculator {
 
   private conditionMultipliers = {
     NEW_UNWORN: 1.000,
-    EXCELLENT: 0.920,
-    VERY_GOOD: 0.820,
-    GOOD: 0.680,
+    EXCELLENT:  0.920,
+    VERY_GOOD:  0.820,
+    GOOD:       0.680,
   };
 
   private boxPapersMultipliers = {
-    fullSet: 1.080,
-    boxOnly: 1.030,
+    fullSet:    1.080,
+    boxOnly:    1.030,
     papersOnly: 1.040,
-    none: 1.000,
+    none:       1.000,
+  };
+
+  // Diamond dial multipliers
+  private dialMultipliers: Record<DialType, number> = {
+    standard:            1.00,
+    factory_diamond:     1.13,   // Factory diamond — verified with paperwork
+    aftermarket_diamond: 0.85,   // Aftermarket — reduces value
+  };
+
+  // Bezel multipliers
+  private bezelMultipliers: Record<BezelType, number> = {
+    original:                   1.00,
+    aftermarket_with_original:  0.92,  // Aftermarket bezel + original bezel included
+    aftermarket_only:           0.80,  // Aftermarket bezel, no original
+    heavy_iced:                 0.70,  // Heavy iced (custom diamonds)
   };
 
   private liquidityMultipliers = {
-    high: 1.050,
+    high:     1.050,
     standard: 1.000,
-    low: 0.920,
+    low:      0.920,
   };
 
   private riskBuffer = 500;
 
-  /**
-   * Determine material multiplier from reference number
-   */
   private getMaterialMultiplier = (referenceNumber: string): number => {
     const lastDigit = referenceNumber.trim().slice(-1);
     return this.materialMultipliers[lastDigit] || 1.00;
   };
 
-  /**
-   * Calculate final quote with complete breakdown
-   */
   calculateQuote = (params: PricingParams): PricingBreakdown => {
     const currentYear = new Date().getFullYear();
     const watchAge = currentYear - params.yearOfManufacture;
 
-    // Step 0: Apply material multiplier (The Valuation Anchor)
+    // Step 0: Material multiplier (valuation anchor)
     const materialMultiplier = this.getMaterialMultiplier(params.referenceNumber);
     const materialAdjustedBase = params.baseMarketPrice * materialMultiplier;
 
-    // Step 1: Apply condition multiplier
+    // Step 1: Condition multiplier
     const conditionMultiplier = this.conditionMultipliers[params.condition];
     const conditionAdjustment = materialAdjustedBase * conditionMultiplier;
 
-    // Step 2: Apply box & papers multiplier
-    const boxPapersMultiplier = this.getBoxPapersMultiplier(
-      params.hasBox,
-      params.hasPapers
-    );
+    // Step 2: Box & papers multiplier
+    const boxPapersMultiplier = this.getBoxPapersMultiplier(params.hasBox, params.hasPapers);
     const boxPapersAdjustment = conditionAdjustment * boxPapersMultiplier;
 
-    // Step 3: Apply liquidity multiplier
-    const liquidityMultiplier = this.getLiquidityMultiplier(
-      params.isHighDemand,
-      params.isLowDemand
-    );
-    const liquidityAdjustment = boxPapersAdjustment * liquidityMultiplier;
+    // Step 3: Diamond dial multiplier
+    const dialMultiplier = this.dialMultipliers[params.dialType ?? 'standard'];
+    const afterDial = boxPapersAdjustment * dialMultiplier;
+
+    // Step 4: Bezel multiplier
+    const bezelMultiplier = this.bezelMultipliers[params.bezelType ?? 'original'];
+    const afterBezel = afterDial * bezelMultiplier;
+
+    // Step 5: Liquidity multiplier
+    const liquidityMultiplier = this.getLiquidityMultiplier(params.isHighDemand, params.isLowDemand);
+    const liquidityAdjustment = afterBezel * liquidityMultiplier;
 
     const subtotal = liquidityAdjustment;
 
-    // Step 5: Determine year-based margin
+    // Step 6: Year-based margin
     const marginPercentage = this.getYearBasedMargin(watchAge, params.condition);
     const marginAmount = subtotal * (marginPercentage / 100);
 
-    // Step 6: Calculate final quote
+    // Step 7: Final quote
     const finalQuote = subtotal - this.riskBuffer - marginAmount;
 
     return {
@@ -119,8 +139,12 @@ export class PricingCalculator {
       conditionAdjustment: conditionAdjustment - materialAdjustedBase,
       boxPapersMultiplier,
       boxPapersAdjustment: boxPapersAdjustment - conditionAdjustment,
+      dialMultiplier,
+      dialAdjustment: afterDial - boxPapersAdjustment,
+      bezelMultiplier,
+      bezelAdjustment: afterBezel - afterDial,
       liquidityMultiplier,
-      liquidityAdjustment: liquidityAdjustment - boxPapersAdjustment,
+      liquidityAdjustment: liquidityAdjustment - afterBezel,
       subtotal,
       riskBuffer: this.riskBuffer,
       watchAge,
@@ -140,36 +164,39 @@ export class PricingCalculator {
 
   private getBoxPapersMultiplier = (hasBox: boolean, hasPapers: boolean): number => {
     if (hasBox && hasPapers) return this.boxPapersMultipliers.fullSet;
-    if (hasBox) return this.boxPapersMultipliers.boxOnly;
-    if (hasPapers) return this.boxPapersMultipliers.papersOnly;
+    if (hasBox)              return this.boxPapersMultipliers.boxOnly;
+    if (hasPapers)           return this.boxPapersMultipliers.papersOnly;
     return this.boxPapersMultipliers.none;
   };
 
   private getLiquidityMultiplier = (isHighDemand?: boolean, isLowDemand?: boolean): number => {
     if (isHighDemand) return this.liquidityMultipliers.high;
-    if (isLowDemand) return this.liquidityMultipliers.low;
+    if (isLowDemand)  return this.liquidityMultipliers.low;
     return this.liquidityMultipliers.standard;
   };
 
-  /**
-   * Format breakdown for display
-   */
   formatBreakdown = (breakdown: PricingBreakdown): any => {
     return {
-      baseMarketPrice: `$${breakdown.baseMarketPrice.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
-      materialAdjustment: breakdown.materialMultiplier !== 1 
-        ? `${breakdown.materialMultiplier > 1 ? '+' : ''}${((breakdown.materialMultiplier - 1) * 100).toFixed(0)}% (Material)` 
+      baseMarketPrice:    `$${breakdown.baseMarketPrice.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
+      materialAdjustment: breakdown.materialMultiplier !== 1
+        ? `${breakdown.materialMultiplier > 1 ? '+' : ''}${((breakdown.materialMultiplier - 1) * 100).toFixed(0)}% (Material)`
         : 'Standard Steel',
       conditionAdjustment: `${breakdown.conditionMultiplier < 1 ? '-' : '+'}${Math.abs((breakdown.conditionMultiplier - 1) * 100).toFixed(0)}%`,
       boxPapersAdjustment: `${breakdown.boxPapersMultiplier > 1 ? '+' : ''}${((breakdown.boxPapersMultiplier - 1) * 100).toFixed(0)}%`,
-      liquidityAdjustment: breakdown.liquidityMultiplier !== 1 
+      dialAdjustment:      breakdown.dialMultiplier !== 1
+        ? `${breakdown.dialMultiplier > 1 ? '+' : ''}${((breakdown.dialMultiplier - 1) * 100).toFixed(0)}% (Dial)`
+        : 'Standard Dial',
+      bezelAdjustment:     breakdown.bezelMultiplier !== 1
+        ? `${breakdown.bezelMultiplier > 1 ? '+' : ''}${((breakdown.bezelMultiplier - 1) * 100).toFixed(0)}% (Bezel)`
+        : 'Original Bezel',
+      liquidityAdjustment: breakdown.liquidityMultiplier !== 1
         ? `${breakdown.liquidityMultiplier > 1 ? '+' : ''}${((breakdown.liquidityMultiplier - 1) * 100).toFixed(0)}%`
         : 'Standard',
-      subtotal: `$${breakdown.subtotal.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
-      riskBuffer: `-$${breakdown.riskBuffer.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
-      marginInfo: `${breakdown.marginPercentage}% (${breakdown.watchAge} year${breakdown.watchAge !== 1 ? 's' : ''} old)`,
+      subtotal:    `$${breakdown.subtotal.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
+      riskBuffer:  `-$${breakdown.riskBuffer.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
+      marginInfo:  `${breakdown.marginPercentage}% (${breakdown.watchAge} year${breakdown.watchAge !== 1 ? 's' : ''} old)`,
       marginAmount: `-$${breakdown.marginAmount.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
-      finalQuote: `$${breakdown.finalQuote.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
+      finalQuote:  `$${breakdown.finalQuote.toLocaleString('en-CA', { minimumFractionDigits: 2 })}`,
     };
   };
 

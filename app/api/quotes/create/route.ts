@@ -9,23 +9,50 @@ import { z } from 'zod';
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const quoteSchema = z.object({
-  customerEmail: z.string().email(),
-  brand: z.string().min(1),
-  referenceNumber: z.string().min(1),
-  condition: z.enum(['NEW_UNWORN', 'EXCELLENT', 'VERY_GOOD', 'GOOD']),
-  hasBox: z.boolean(),
-  hasPapers: z.boolean(),
+  customerEmail:      z.string().email(),
+  brand:              z.string().min(1),
+  referenceNumber:    z.string().min(1),
+  condition:          z.enum(['NEW_UNWORN', 'EXCELLENT', 'VERY_GOOD', 'GOOD']),
+  hasBox:             z.boolean(),
+  hasPapers:          z.boolean(),
   hasOriginalBracelet: z.boolean().optional().default(true),
-  hasServiceRecords: z.boolean().optional().default(false),
-  yearOfManufacture: z.number().min(1950).max(new Date().getFullYear()),
+  hasServiceRecords:  z.boolean().optional().default(false),
+  yearOfManufacture:  z.number().min(1950).max(new Date().getFullYear()),
+  dialType:  z.enum(['standard', 'factory_diamond', 'aftermarket_diamond']).optional().default('standard'),
+  bezelType: z.enum(['original', 'aftermarket_with_original', 'aftermarket_only', 'heavy_iced']).optional().default('original'),
 });
+
+// Map common reference numbers to model names
+function resolveModelName(brand: string, ref: string): string {
+  if (brand.toLowerCase() !== 'rolex') return ref;
+  const map: Record<string, string> = {
+    // Submariner
+    '114060': 'Submariner',      '124060': 'Submariner',
+    '116610LN': 'Submariner Date', '116610LV': 'Submariner Date',
+    '126610LN': 'Submariner Date', '126610LV': 'Submariner Date',
+    // Daytona
+    '116500LN': 'Daytona', '116500': 'Daytona',
+    '126500LN': 'Daytona', '116520': 'Daytona', '116523': 'Daytona',
+    // GMT-Master II
+    '116710LN': 'GMT-Master II', '116710BLNR': 'GMT-Master II',
+    '126710BLRO': 'GMT-Master II', '126710BLNR': 'GMT-Master II',
+    // Explorer
+    '214270': 'Explorer', '226570': 'Explorer II', '216570': 'Explorer II',
+    // Datejust
+    '126234': 'Datejust 36', '126300': 'Datejust 41',
+    '69173': 'Datejust',    '16233': 'Datejust',    '16200': 'Datejust',
+    // Sky-Dweller
+    '326934': 'Sky-Dweller', '336935': 'Sky-Dweller',
+  };
+  return map[ref.toUpperCase()] ?? ref;
+}
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const validatedData = quoteSchema.parse(body);
 
-    // 1. Search eBay for sold listings
+    // 1. Search eBay for listings
     console.log("🔍 Searching eBay for:", validatedData.brand, validatedData.referenceNumber);
     const ebayListings = await ebayService.searchSoldListings({
       keywords: `${validatedData.brand} ${validatedData.referenceNumber}`,
@@ -35,11 +62,7 @@ export async function POST(request: NextRequest) {
     });
 
     // 2. Filter valid listings
-    const validListings = ebayService.filterValidListings(
-        ebayListings, 
-        validatedData.referenceNumber || ""
-    );
-    
+    const validListings = ebayService.filterValidListings(ebayListings, validatedData.referenceNumber || "");
     console.log("✅ After filtering:", validListings.length, "valid listings");
 
     if (validListings.length < 5) {
@@ -49,17 +72,13 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // 3. Process Prices
+    // 3. Process prices
     const pricesInCAD = await Promise.all(validListings.map(async (listing) => {
-      if (listing.currency === "USD") {
-        return await ebayService.convertToCAD(listing.soldPrice);
-      }
+      if (listing.currency === "USD") return await ebayService.convertToCAD(listing.soldPrice);
       return listing.soldPrice;
     }));
 
     const cleanedPrices = ebayService.removeOutliers(pricesInCAD);
-
-    // Guard: removeOutliers can return empty array in extreme cases — fall back to raw prices
     const safePrices = cleanedPrices.length > 0 ? cleanedPrices : pricesInCAD;
     let baseMarketPrice = ebayService.calculateMedian(safePrices);
 
@@ -68,66 +87,73 @@ export async function POST(request: NextRequest) {
     const validation = validateEbayPrice(validatedData.referenceNumber, ebayMedianUSD);
 
     if (validation.referencePrice && !validation.isValid && validation.difference && validation.difference < -30) {
-        baseMarketPrice = validation.referencePrice * 1.35;
+      baseMarketPrice = validation.referencePrice * 1.35;
     }
 
-    // 5. Calculate Quote
+    // 5. Calculate quote (includes dial + bezel multipliers)
     const pricingBreakdown = pricingCalculator.calculateQuote({
       baseMarketPrice,
-      referenceNumber: validatedData.referenceNumber, 
-      condition: validatedData.condition,
-      hasBox: validatedData.hasBox,
-      hasPapers: validatedData.hasPapers,
+      referenceNumber:    validatedData.referenceNumber,
+      condition:          validatedData.condition,
+      hasBox:             validatedData.hasBox,
+      hasPapers:          validatedData.hasPapers,
       hasOriginalBracelet: validatedData.hasOriginalBracelet,
-      yearOfManufacture: validatedData.yearOfManufacture,
-      isHighDemand: pricingCalculator.isHighDemandBrand(validatedData.brand),
+      yearOfManufacture:  validatedData.yearOfManufacture,
+      isHighDemand:       pricingCalculator.isHighDemandBrand(validatedData.brand),
+      dialType:           validatedData.dialType,
+      bezelType:          validatedData.bezelType,
     });
 
-    // 6. Save Quote to Supabase
+    // 6. Resolve model name from reference number
+    const modelName = resolveModelName(validatedData.brand, validatedData.referenceNumber);
+
+    // 7. Save Quote
     const validUntil = new Date();
-    validUntil.setHours(validUntil.getHours() + 72); 
+    validUntil.setHours(validUntil.getHours() + 72);
 
     const quote = await prisma.quote.create({
       data: {
-        customerEmail: validatedData.customerEmail,
-        brand: validatedData.brand,
-        model: "Submariner", 
-        referenceNumber: validatedData.referenceNumber,
-        condition: validatedData.condition,
-        hasBox: validatedData.hasBox,
-        hasPapers: validatedData.hasPapers,
+        customerEmail:      validatedData.customerEmail,
+        brand:              validatedData.brand,
+        model:              modelName,
+        referenceNumber:    validatedData.referenceNumber,
+        condition:          validatedData.condition,
+        hasBox:             validatedData.hasBox,
+        hasPapers:          validatedData.hasPapers,
         hasOriginalBracelet: validatedData.hasOriginalBracelet,
-        hasServiceRecords: validatedData.hasServiceRecords,
-        yearOfManufacture: validatedData.yearOfManufacture,
+        hasServiceRecords:  validatedData.hasServiceRecords,
+        yearOfManufacture:  validatedData.yearOfManufacture,
+        dialType:           validatedData.dialType,
+        bezelType:          validatedData.bezelType,
         baseMarketPrice,
-        finalQuoteAmount: pricingBreakdown.finalQuote,
+        finalQuoteAmount:   pricingBreakdown.finalQuote,
         calculationBreakdown: pricingBreakdown as any,
         validUntil,
         status: "ACTIVE"
       }
     });
 
-    // 7. Log to SearchHistory (non-fatal)
+    // 8. Log to SearchHistory (non-fatal)
     try {
       await prisma.searchHistory.create({
         data: {
-          brand: validatedData.brand,
-          referenceNumber: validatedData.referenceNumber,
+          brand:            validatedData.brand,
+          referenceNumber:  validatedData.referenceNumber,
           yearOfManufacture: validatedData.yearOfManufacture,
-          condition: validatedData.condition,
-          totalListings: ebayListings.length,
-          validListings: validListings.length,
-          priceRangeMin: Math.min(...safePrices),
-          priceRangeMax: Math.max(...safePrices),
-          medianPrice: baseMarketPrice,
-          quoteId: quote.id,
+          condition:        validatedData.condition,
+          totalListings:    ebayListings.length,
+          validListings:    validListings.length,
+          priceRangeMin:    Math.min(...safePrices),
+          priceRangeMax:    Math.max(...safePrices),
+          medianPrice:      baseMarketPrice,
+          quoteId:          quote.id,
         }
       });
     } catch (historyError) {
       console.error("⚠️ SearchHistory log failed (non-fatal):", historyError);
     }
 
-    // 8. Trigger Email via Resend (non-fatal — quote is already saved)
+    // 9. Email (non-fatal)
     if (process.env.RESEND_API_KEY) {
       try {
         await resend.emails.send({

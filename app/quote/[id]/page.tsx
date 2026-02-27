@@ -1,7 +1,21 @@
 import { notFound } from 'next/navigation';
+import Link from 'next/link';
 import { prisma } from '@/lib/prisma';
 import { format } from 'date-fns';
 import QuoteActions from '@/components/QuoteActions';
+
+const DIAL_LABELS: Record<string, string> = {
+  standard:            'Standard',
+  factory_diamond:     'Factory Diamond',
+  aftermarket_diamond: 'Aftermarket Diamond',
+};
+
+const BEZEL_LABELS: Record<string, string> = {
+  original:                  'Original',
+  aftermarket_with_original: 'Aftermarket + Original Included',
+  aftermarket_only:          'Aftermarket Only',
+  heavy_iced:                'Heavy Iced',
+};
 
 export default async function QuotePage({ params }: { params: { id: string } }) {
   const quote = await prisma.quote.findUnique({
@@ -10,8 +24,13 @@ export default async function QuotePage({ params }: { params: { id: string } }) 
 
   if (!quote) notFound();
 
-  // Extract calculations from the seeded JSON
   const breakdown = quote.calculationBreakdown as any;
+
+  const dialLabel  = DIAL_LABELS[(quote as any).dialType  ?? 'standard']  ?? (quote as any).dialType;
+  const bezelLabel = BEZEL_LABELS[(quote as any).bezelType ?? 'original'] ?? (quote as any).bezelType;
+
+  const showDial  = (quote as any).dialType  && (quote as any).dialType  !== 'standard';
+  const showBezel = (quote as any).bezelType && (quote as any).bezelType !== 'original';
 
   return (
     <div className="min-h-screen bg-[#F9F7F2] py-20 px-4 font-serif">
@@ -22,7 +41,7 @@ export default async function QuotePage({ params }: { params: { id: string } }) 
           id="certificate-content"
           className="bg-white border border-[#E5E1D8] shadow-sm p-12 relative overflow-hidden"
         >
-          {/* Subtle Watermark Overlay */}
+          {/* Watermark */}
           <div className="absolute top-0 right-0 p-8 opacity-5 text-8xl font-bold select-none">
             MP
           </div>
@@ -37,7 +56,8 @@ export default async function QuotePage({ params }: { params: { id: string } }) 
           <div className="grid grid-cols-2 gap-12 mb-12 text-[#333]">
             <div>
               <p className="text-[10px] uppercase tracking-widest text-[#999] mb-1">Brand & Model</p>
-              <p className="text-xl">{quote.brand} {quote.model}</p>
+              <p className="text-xl">{quote.brand}</p>
+              <p className="text-base text-[#444] mt-0.5">{quote.model}</p>
               <p className="text-sm text-[#666] mt-1">Ref: {quote.referenceNumber}</p>
             </div>
             <div className="text-right">
@@ -60,20 +80,37 @@ export default async function QuotePage({ params }: { params: { id: string } }) 
           {/* Breakdown Table */}
           <div className="space-y-4 border-t border-[#E5E1D8] pt-8 mb-12">
             <h3 className="text-[10px] uppercase tracking-widest text-[#999] mb-4">Valuation Breakdown</h3>
+
             <div className="flex justify-between text-sm italic">
-              <span>Market Median (Last 30 Days)</span>
+              <span>Market Median (eBay Comps)</span>
               <span>${quote.baseMarketPrice.toLocaleString()}</span>
             </div>
+
+            {breakdown?.materialAdjustment !== 0 && (
+              <div className="flex justify-between text-sm italic text-[#666]">
+                <span>Material Premium</span>
+                <span>+{breakdown?.materialAdjustment?.toLocaleString() ?? '0'}</span>
+              </div>
+            )}
+
             <div className="flex justify-between text-sm italic text-[#666]">
-              <span>Condition Adjustment ({quote.condition})</span>
-              <span>-{breakdown?.conditionAdjustment?.toLocaleString() || '0'}</span>
+              <span>Condition ({quote.condition.replace(/_/g, ' ')})</span>
+              <span>{(breakdown?.conditionAdjustment ?? 0) < 0 ? '' : '+'}{breakdown?.conditionAdjustment?.toLocaleString() ?? '0'}</span>
             </div>
 
-            {/* Seeded Material Multiplier Display */}
-            <div className="flex justify-between text-sm italic font-semibold text-[#1A1A1A]">
-              <span>Material Premium ({breakdown?.metal || 'Standard'})</span>
-              <span>+{breakdown?.materialAdjustment?.toLocaleString() || '0'}</span>
-            </div>
+            {showDial && (
+              <div className="flex justify-between text-sm italic text-[#666]">
+                <span>Dial — {dialLabel}</span>
+                <span>{(breakdown?.dialAdjustment ?? 0) >= 0 ? '+' : ''}{breakdown?.dialAdjustment?.toLocaleString() ?? '0'}</span>
+              </div>
+            )}
+
+            {showBezel && (
+              <div className="flex justify-between text-sm italic text-[#666]">
+                <span>Bezel — {bezelLabel}</span>
+                <span>{(breakdown?.bezelAdjustment ?? 0) >= 0 ? '+' : ''}{breakdown?.bezelAdjustment?.toLocaleString() ?? '0'}</span>
+              </div>
+            )}
 
             <div className="flex justify-between text-sm italic border-t border-[#E5E1D8] pt-4 font-bold">
               <span>Final MasterPiece Offer</span>
@@ -81,22 +118,25 @@ export default async function QuotePage({ params }: { params: { id: string } }) 
             </div>
           </div>
 
-          {/* Footer Branding */}
+          {/* Footer */}
           <div className="text-center">
             <p className="mt-6 text-[10px] text-[#999] leading-relaxed italic">
-              This quote is backed by real-time market data and subject to physical inspection. <br />
+              This quote is backed by real-time market data and subject to physical inspection.<br />
               Quotes are guaranteed for 72 hours from issuance.
             </p>
           </div>
         </div>
 
-        {/* Action Buttons (Excluded from PDF via CSS in QuoteActions) */}
+        {/* Action Buttons */}
         <div className="mt-12 flex flex-col items-center gap-6">
           <QuoteActions quoteId={String(quote.id)} />
 
-          <button className="bg-[#1A1A1A] text-white px-12 py-4 uppercase tracking-widest text-xs hover:bg-[#333] transition-colors w-full sm:w-auto">
+          <Link
+            href={`mailto:info@mpwatchtool.com?subject=Book In-Store Verification — ${quote.brand} ${quote.referenceNumber}&body=Certificate ID: ${quote.id.slice(0, 8).toUpperCase()}%0D%0A%0D%0APlease book me in for an in-store verification.`}
+            className="bg-[#1A1A1A] text-white px-12 py-4 uppercase tracking-widest text-xs hover:bg-[#333] transition-colors w-full sm:w-auto text-center"
+          >
             Book In-Store Verification
-          </button>
+          </Link>
         </div>
       </div>
     </div>

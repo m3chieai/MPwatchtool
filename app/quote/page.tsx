@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 type WatchCondition = 'NEW_UNWORN' | 'EXCELLENT' | 'VERY_GOOD' | 'GOOD';
+type DialType  = 'standard' | 'factory_diamond' | 'aftermarket_diamond';
+type BezelType = 'original' | 'aftermarket_with_original' | 'aftermarket_only' | 'heavy_iced';
 
 interface QuoteFormData {
   brand: string;
@@ -15,6 +17,8 @@ interface QuoteFormData {
   hasOriginalBracelet: boolean;
   hasServiceRecords: boolean;
   yearOfManufacture: number | '';
+  dialType: DialType;
+  bezelType: BezelType;
 }
 
 const WATCH_BRANDS = [
@@ -72,6 +76,8 @@ export default function QuotePage() {
     hasOriginalBracelet: true,
     hasServiceRecords: false,
     yearOfManufacture: '',
+    dialType: 'standard',
+    bezelType: 'original',
   });
 
   const currentYear = new Date().getFullYear();
@@ -420,6 +426,99 @@ export default function QuotePage() {
                   </div>
                 </div>
               </label>
+            </div>
+          </div>
+
+          {/* Step 4: Diamond Dial */}
+          <div className="pt-16 border-t border-[#1a1a1a]/10">
+            <div className="mb-8">
+              <div className="flex items-center gap-4 mb-2">
+                <div className="w-8 h-8 border border-[#1a1a1a] flex items-center justify-center">
+                  <span className="text-lg" style={{ fontFamily: 'var(--serif)' }}>IV</span>
+                </div>
+                <h2 className="text-xs tracking-widest uppercase text-[#5a5a48]" style={{ fontFamily: 'var(--sans)', letterSpacing: '0.15em' }}>
+                  Dial Customization
+                </h2>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-4" style={{ fontFamily: 'var(--sans)' }}>
+              {([
+                { value: 'standard',            label: 'Standard Dial',           note: '',                                                              multiplier: '' },
+                { value: 'factory_diamond',      label: 'Factory Diamond Dial',    note: 'Factory dial to be inspected and verified with paperwork.',     multiplier: '+13%' },
+                { value: 'aftermarket_diamond',  label: 'Aftermarket Diamond Dial',note: 'Aftermarket modifications reduce resale value.',                 multiplier: '-15%' },
+              ] as { value: DialType; label: string; note: string; multiplier: string }[]).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setFormData({ ...formData, dialType: opt.value })}
+                  className={`p-5 border text-left transition-all ${
+                    formData.dialType === opt.value
+                      ? 'border-[#1a1a1a] bg-[#1a1a1a] text-[#f8f6f3]'
+                      : 'border-[#1a1a1a]/20 hover:border-[#d4af37]'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-sm font-medium">{opt.label}</span>
+                    {opt.multiplier && (
+                      <span className={`text-xs font-mono ${formData.dialType === opt.value ? 'text-[#d4af37]' : opt.value === 'factory_diamond' ? 'text-green-700' : 'text-red-700'}`}>
+                        {opt.multiplier}
+                      </span>
+                    )}
+                  </div>
+                  {opt.note && (
+                    <p className={`text-xs leading-relaxed ${formData.dialType === opt.value ? 'text-[#f8f6f3]/60' : 'text-[#5a5a48]'}`}>
+                      {opt.note}
+                    </p>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Step 5: Diamond Bezel */}
+          <div className="pt-16 border-t border-[#1a1a1a]/10">
+            <div className="mb-8">
+              <div className="flex items-center gap-4 mb-2">
+                <div className="w-8 h-8 border border-[#1a1a1a] flex items-center justify-center">
+                  <span className="text-lg" style={{ fontFamily: 'var(--serif)' }}>V</span>
+                </div>
+                <h2 className="text-xs tracking-widest uppercase text-[#5a5a48]" style={{ fontFamily: 'var(--sans)', letterSpacing: '0.15em' }}>
+                  Bezel Type
+                </h2>
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4" style={{ fontFamily: 'var(--sans)' }}>
+              {([
+                { value: 'original',                   label: 'Original Bezel',                          note: 'Factory bezel in original condition.',                            multiplier: '' },
+                { value: 'aftermarket_with_original',  label: 'Aftermarket Bezel + Original Included',  note: 'Aftermarket diamond bezel installed; original bezel included.',   multiplier: '-8%' },
+                { value: 'aftermarket_only',           label: 'Aftermarket Bezel Only',                 note: 'Aftermarket diamond bezel only; original bezel not included.',    multiplier: '-20%' },
+                { value: 'heavy_iced',                 label: 'Heavy Iced Bezel',                       note: 'Heavily customised with diamonds. Subject to inspection.',         multiplier: '-30%' },
+              ] as { value: BezelType; label: string; note: string; multiplier: string }[]).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setFormData({ ...formData, bezelType: opt.value })}
+                  className={`p-5 border text-left transition-all ${
+                    formData.bezelType === opt.value
+                      ? 'border-[#1a1a1a] bg-[#1a1a1a] text-[#f8f6f3]'
+                      : 'border-[#1a1a1a]/20 hover:border-[#d4af37]'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-sm font-medium">{opt.label}</span>
+                    {opt.multiplier && (
+                      <span className={`text-xs font-mono ${formData.bezelType === opt.value ? 'text-[#d4af37]' : 'text-red-700'}`}>
+                        {opt.multiplier}
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs leading-relaxed ${formData.bezelType === opt.value ? 'text-[#f8f6f3]/60' : 'text-[#5a5a48]'}`}>
+                    {opt.note}
+                  </p>
+                </button>
+              ))}
             </div>
           </div>
 

@@ -140,6 +140,8 @@ model Quote {
   hasOriginalBracelet   Boolean       @default(true)
   hasServiceRecords     Boolean       @default(false)
   yearOfManufacture     Int?
+  dialType              String        @default("standard")
+  bezelType             String        @default("original")
   baseMarketPrice       Float
   finalQuoteAmount      Float
   calculationBreakdown  Json?
